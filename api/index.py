@@ -1,4 +1,3 @@
-import os
 import time
 from datetime import datetime
 from flask import Flask, render_template_string, request
@@ -153,9 +152,9 @@ def analyze_smart_money_concepts(klines):
     curr_close = float(klines[-1][4])
     
     if curr_low < prev_low and curr_close > prev_low:
-        return "SM_SWEEP_LONG (اختراق وهمي للدعم - فرصة صعود) 🚀", True
+        return "SM_SWEEP_LONG (اختراق وهمي للدعم - صعود) 🚀", True
     elif curr_high > prev_high and curr_close < prev_high:
-        return "SM_SWEEP_SHORT (اختراق وهمي للمقاومة - فرصة هبوط) 🩸", True
+        return "SM_SWEEP_SHORT (اختراق وهمي للمقاومة - هبوط) 🩸", True
     return "استقرار (لا يوجد سحب سيولة)", False
 
 @app.route("/")
@@ -325,4 +324,3 @@ HTML_TEMPLATE = """
 </body>
 </html>
 """
-    
