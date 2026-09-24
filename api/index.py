@@ -1,13 +1,12 @@
 import os
 import time
-from datetime import datetime, timedelta
-from flask import Flask, render_template_string, redirect, url_for, request
+from datetime import datetime
+from flask import Flask, render_template_string, request
 import requests
 import xml.etree.ElementTree as ET
 
 app = Flask(__name__)
 
-HISTORY_FILE = "signals_history.txt"
 SYMBOL = "BTCUSDT"
 LIMIT = 100
 
@@ -141,15 +140,6 @@ def calculate_macd(closes):
     macd_hist = dif - dea
     return round(dif, 2), round(dea, 2), round(macd_hist, 2)
 
-def calculate_ema(closes, period=50):
-    if len(closes) < period:
-        return closes[-1]
-    multiplier = 2 / (period + 1)
-    ema = sum(closes[:period]) / period
-    for price in closes[period:]:
-        ema = (price - ema) * multiplier + ema
-    return ema
-
 def calculate_support_resistance(klines):
     if len(klines) < 20:
         return 0, 0
@@ -182,31 +172,10 @@ def analyze_smart_money_concepts(klines):
     curr_close = float(klines[-1][4])
     
     if curr_low < prev_low and curr_close > prev_low:
-        return "SM_SWEEP_LONG (اختراق وهمي للدعم المؤكد بإغلاق) 🚀", True
+        return "SM_SWEEP_LONG (اختراق وهمي للدعم) 🚀", True
     elif curr_high > prev_high and curr_close < prev_high:
-        return "SM_SWEEP_SHORT (اختراق وهمي للمقاومة المؤكد بإغلاق) 🩸", True
+        return "SM_SWEEP_SHORT (اختراق وهمي للمقاومة) 🩸", True
     return "استقرار (لا يوجد سحب سيولة)", False
-
-def check_multi_timeframe_trend(current_tf):
-    higher_tf = "4h"
-    if current_tf == "4h":
-        higher_tf = "1d"
-    elif current_tf == "1h":
-        higher_tf = "4h"
-    
-    klines_htf = get_binance_klines(higher_tf, limit=50)
-    if not klines_htf:
-        return "NEUTRAL"
-    
-    closes_htf = [float(k[4]) for k in klines_htf]
-    ema_htf = calculate_ema(closes_htf, period=50)
-    current_htf_price = closes_htf[-1]
-    
-    if current_htf_price > ema_htf:
-        return "BULLISH"
-    elif current_htf_price < ema_htf:
-        return "BEARISH"
-    return "NEUTRAL"
 
 def check_fair_value_gap(klines):
     if len(klines) < 3:
@@ -221,129 +190,13 @@ def check_fair_value_gap(klines):
         return "Bearish FVG نشط 🔴"
     return "استقرار (لا يوجد FVG)"
 
-def has_active_signal():
-    if not os.path.exists(HISTORY_FILE):
-        return False
-    try:
-        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-            for line in f:
-                if "قيد التتبع ⏳" in line or "محمية 🛡️" in line:
-                    return True
-    except Exception:
-        pass
-    return False
-
-def save_signal(signal_type, entry_price, target_price, stop_loss):
-    if has_active_signal():
-        return False 
-        
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    line = f"{now} | {signal_type} | الدخول: ${entry_price:.2f} | الهدف: ${target_price:.2f} | الوقف: ${stop_loss:.2f} | قيد التتبع ⏳\n"
-    try:
-        with open(HISTORY_FILE, "a", encoding="utf-8") as f:
-            f.write(line)
-        return True 
-    except Exception:
-        pass
-    return False
-
-def update_signals_status(current_price):
-    if not os.path.exists(HISTORY_FILE) or current_price <= 0:
-        return
-    try:
-        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-        
-        updated = False
-        new_lines = []
-        for line in lines:
-            parts = line.strip().split(" | ")
-            if len(parts) >= 6 and ("قيد التتبع ⏳" in parts[5] or "محمية 🛡️" in parts[5]):
-                sig_type = parts[1]
-                try:
-                    entry = float(parts[2].split("$")[1])
-                    target = float(parts[3].split("$")[1])
-                    stop_part = parts[4]
-                    
-                    stop_val_str = stop_part.split("$")[1].split(" ")[0]
-                    stop = float(stop_val_str)
-                    
-                    if "LONG" in sig_type or "NEWS" in sig_type:
-                        distance_to_target = target - entry
-                        current_profit_progress = current_price - entry
-                        
-                        if distance_to_target > 0 and current_profit_progress >= (distance_to_target * 0.5):
-                            if stop < entry:
-                                stop = entry
-                                parts[4] = f"الوقف: ${stop:.2f} (محمي 🛡️)"
-                                parts[5] = "محمية 🛡️"
-                                updated = True
-
-                        if current_price >= target:
-                            parts[5] = "حقق الهدف ✅"
-                            updated = True
-                        elif current_price <= stop:
-                            parts[5] = "ضرب الوقف ❌" if stop < entry else "خروج محمي بربح 🛡️✅"
-                            updated = True
-                            
-                    elif "SHORT" in sig_type or "بيع" in sig_type:
-                        distance_to_target = entry - target
-                        current_profit_progress = entry - current_price
-                        
-                        if distance_to_target > 0 and current_profit_progress >= (distance_to_target * 0.5):
-                            if stop > entry:
-                                stop = entry
-                                parts[4] = f"الوقف: ${stop:.2f} (محمي 🛡️)"
-                                parts[5] = "محمية 🛡️"
-                                updated = True
-
-                        if current_price <= target:
-                            parts[5] = "حقق الهدف ✅"
-                            updated = True
-                        elif current_price >= stop:
-                            parts[5] = "ضرب الوقف ❌" if stop > entry else "خروج محمي بربح 🛡️✅"
-                            updated = True
-                except Exception as e:
-                    print(f"Error updating signal: {e}")
-                new_lines.append(" | ".join(parts) + "\n")
-            else:
-                new_lines.append(line)
-                
-        if updated:
-            with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-                f.writelines(new_lines)
-    except Exception as e:
-        print(f"Error reading/writing history: {e}")
-
-def load_history():
-    history = []
-    if os.path.exists(HISTORY_FILE):
-        try:
-            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-                lines = f.readlines()
-                for line in reversed(lines):
-                    parts = line.strip().split(" | ")
-                    if len(parts) >= 6:
-                        history.append({
-                            "time": parts[0],
-                            "type": parts[1],
-                            "details": f"{parts[2]} | {parts[3]} | {parts[4]}",
-                            "status": parts[5]
-                        })
-        except Exception:
-            pass
-    return history
-
 @app.route("/")
 def index():
     tf = request.args.get("tf", "15m")
     klines = get_binance_klines(tf, limit=100)
     change_24h, current_price = get_market_data()
     
-    update_signals_status(current_price)
-    
     news_title = fetch_latest_crypto_news()
-    news_sentiment, _ = analyze_news_sentiment(news_title)
     
     rsi = 50.0
     upper_bb, lower_bb = current_price, current_price
@@ -352,9 +205,7 @@ def index():
     market_structure = "جاري التحليل..."
     smc_status = "جاري الفحص..."
     fvg_status = "جاري الفحص..."
-    htf_trend = "NEUTRAL"
-    market_status = "المحرك ينتظر إغلاق الشمعة وتأكيد الشروط الفنية بدقة..."
-    play_sound = False
+    has_signal = "false"
 
     if klines and len(klines) > 30:
         closes = [float(k[4]) for k in klines]
@@ -365,32 +216,24 @@ def index():
         _, _, macd_hist = calculate_macd(closes)
         support_val, resistance_val = calculate_support_resistance(klines)
         market_structure = analyze_market_structure(closes)
-        smc_status, smc_triggered = analyze_smart_money_concepts(klines)
+        smc_status, is_smc_triggered = analyze_smart_money_concepts(klines)
         fvg_status = check_fair_value_gap(klines)
-        htf_trend = check_multi_timeframe_trend(tf)
         
-        if not has_active_signal():
-            if rsi < 35 and current_price <= lower_bb * 1.003:
-                target = round(current_price * 1.01, 2)
-                stop = round(current_price * 0.994, 2)
-                if save_signal("شراء LONG - ذكي مؤكد", current_price, target, stop):
-                    play_sound = True
-            
-            elif rsi > 65 and current_price >= upper_bb * 0.997:
-                target = round(current_price * 0.99, 2)
-                stop = round(current_price * 1.006, 2)
-                if save_signal("بيع SHORT - نزول مؤكد", current_price, target, stop):
-                    play_sound = True
+        # إذا حدث كسر هيكلي أو سحب سيولة، نفعل حالة التنبيه الصوتي
+        if "كسر" in market_structure or is_smc_triggered or rsi > 70 or rsi < 30:
+            has_signal = "true"
 
-    history = load_history()
     rsi_pct = min(max(rsi, 0), 100)
+    
+    history = [
+        {"time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "type": "التنبيهات الصوتية", "details": "النظام الصوتي مفعل وجاهز لإطلاق صافرة التنبيه عند الفرص", "status": "نشط 🔔"}
+    ]
 
     return render_template_string(HTML_TEMPLATE, 
                                  price=current_price, 
                                  change_24h=change_24h,
                                  rsi=rsi,
                                  rsi_pct=rsi_pct,
-                                 market_cap=1640,
                                  macd_hist=macd_hist,
                                  support_val=support_val,
                                  resistance_val=resistance_val,
@@ -399,12 +242,10 @@ def index():
                                  market_structure=market_structure,
                                  smc_status=smc_status,
                                  fvg_status=fvg_status,
-                                 htf_trend=htf_trend,
-                                 market_status=market_status,
                                  latest_news=news_title,
                                  history=history,
                                  current_tf=tf,
-                                 play_sound=play_sound)
+                                 has_signal=has_signal)
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -412,32 +253,58 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>منصة سكالبينج الثنائية وتحليل الأخبار الآلي (Long & Short)</title>
-    <script src="https://s3.tradingview.com/tv.js"></script>
+    <title>منصة سكالبينج الثنائية مع التنبيه الصوتي</title>
     <style>
         body { background-color: #121212; color: #e0e0e0; font-family: Tahoma, sans-serif; padding: 10px; margin: 0; }
         .card { background: #1e1e1e; padding: 12px; border-radius: 10px; margin-bottom: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
         .price { font-size: 24px; font-weight: bold; color: #4CAF50; text-align: center; }
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
         .box { background: #2a2a2a; padding: 10px; border-radius: 8px; text-align: center; font-size: 13px; }
-        .alert-box { background: #2a2a2a; padding: 10px; border-radius: 8px; text-align: center; font-size: 14px; color: #ffeb3b; margin-bottom: 12px; border: 1px dashed #ff9800; }
         .news-box { background: #1a2634; padding: 10px; border-radius: 8px; text-align: right; font-size: 12px; color: #64B5F6; margin-bottom: 12px; border: 1px solid #1E88E5; }
         .history-item { background: #252525; padding: 8px; margin-bottom: 8px; border-radius: 6px; font-size: 12px; border-right: 4px solid #2196F3; }
-        .status-success { color: #4CAF50; font-weight: bold; }
-        .status-fail { color: #f44336; font-weight: bold; }
-        .status-pending { color: #ff9800; font-weight: bold; }
-        .status-protected { color: #00bcd4; font-weight: bold; }
         .tf-select { background: #2a2a2a; color: #fff; padding: 6px 10px; border-radius: 6px; border: 1px solid #444; font-size: 13px; cursor: pointer; }
+        .alert-btn { background: #ff9800; color: #000; border: none; padding: 6px 12px; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 12px; }
         .progress-bar-container { background: #333; border-radius: 4px; height: 6px; width: 100%; margin-top: 6px; overflow: hidden; }
         .progress-bar-fill { background: #ff9800; height: 100%; width: {{ rsi_pct }}%; }
     </style>
     <meta http-equiv="refresh" content="15">
+    <script>
+        // نظام التنبيه الصوتي باستخدام Web Audio API المتطور
+        function playBeep() {
+            try {
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+                
+                oscillator.type = 'sine';
+                oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // تردد الصوت (نغمة تنبيه واضحة)
+                
+                gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                
+                oscillator.start();
+                oscillator.stop(audioCtx.currentTime + 0.4); // مدة التنبيه نصف ثانية تقريباً
+            } catch(e) {
+                console.log("Audio not allowed yet");
+            }
+        }
+
+        window.onload = function() {
+            // تحقق مما إذا كانت هناك إشارة جديدة وتفعيل الصوت
+            var signalDetected = "{{ has_signal }}";
+            if(signalDetected === "true") {
+                playBeep();
+            }
+        };
+    </script>
 </head>
 <body>
     <div class="card" style="display: flex; justify-content: space-between; align-items: center;">
         <div>
-            <div style="font-size: 10px; color: #aaa; margin-bottom: 3px;">اختر الفريم الزمني:</div>
-            <select class="tf-select" id="timeframeSelect" onchange="changeTimeframe()">
+            <div style="font-size: 10px; color: #aaa; margin-bottom: 3px;">الفريم الزمني:</div>
+            <select class="tf-select" id="timeframeSelect" onchange="location.href='/?tf='+this.value">
                 <option value="1m" {% if current_tf == '1m' %}selected{% endif %}>1 دقيقة</option>
                 <option value="5m" {% if current_tf == '5m' %}selected{% endif %}>5 دقائق</option>
                 <option value="15m" {% if current_tf == '15m' %}selected{% endif %}>15 دقيقة</option>
@@ -446,19 +313,18 @@ HTML_TEMPLATE = """
                 <option value="4h" {% if current_tf == '4h' %}selected{% endif %}>4 ساعات</option>
             </select>
         </div>
+        <div>
+            <button class="alert-btn" onclick="playBeep()">🔊 اختبار التنبيه الصوتي</button>
+        </div>
         <div style="text-align: left;">
             <div style="font-size: 11px; color: #aaa;">BTC/USDT <span style="color: {{ 'green' if change_24h >= 0 else 'red' }};">({{ '+' if change_24h >= 0 else '' }}{{ change_24h }}%)</span></div>
-            <div class="price" style="font-size: 20px;">${{ price }}</div>
+            <div class="price" style="font-size: 18px;">${{ price }}</div>
         </div>
     </div>
 
     <div class="news-box">
-        <b>📰 آخر خبر حي تم تحليله آلياً:</b><br>
+        <b>📰 آخر خبر تم تحليله:</b><br>
         <span>{{ latest_news }}</span>
-    </div>
-
-    <div class="card" style="padding: 5px;">
-        <div id="tradingview_chart" style="height: 260px; width: 100%;"></div>
     </div>
 
     <div class="grid">
@@ -472,20 +338,31 @@ HTML_TEMPLATE = """
             <div style="font-size: 15px; font-weight: bold; color: {{ 'green' if macd_hist > 0 else 'red' }}; margin-top: 4px;">{{ macd_hist }}</div>
         </div>
         <div class="box">
-            <div>الدعم والمقاومة (S/R)</div>
+            <div>الدعم والمقاومة</div>
             <div style="font-size: 11px; color: #4CAF50; margin-top: 2px;">دعم: ${{ support_val }}</div>
             <div style="font-size: 11px; color: #f44336;">مقاومة: ${{ resistance_val }}</div>
         </div>
         <div class="box">
-            <div>هيكل السوق (BOS)</div>
-            <div style="font-size: 12px; font-weight: bold; color: #00bcd4; margin-top: 4px;">{{ market_structure }}</div>
+            <div>هيكل السوق والسيولة</div>
+            <div style="font-size: 11px; font-weight: bold; color: #00bcd4; margin-top: 2px;">{{ market_structure }}</div>
+            <div style="font-size: 10px; color: #ffeb3b; margin-top: 2px;">{{ smc_status }}</div>
         </div>
     </div>
 
     <div class="card">
-        <div style="font-size: 13px; font-weight: bold; margin-bottom: 6px; color: #ff9800;">📋 سجل الصفقات والتتبع الآلي:</div>
-        {% if history %}
-            {% for item in history %}
-            <div class="history-item">
-                <div style="display: flex; justify-content: space-between; color: #aaa; font-size: 10px;">
-                    <span>{{ item.time }}</
+        <div style="font-size: 13px; font-weight: bold; margin-bottom: 6px; color: #ff9800;">📋 السجل وحالة التنبيهات:</div>
+        {% for item in history %}
+        <div class="history-item">
+            <div style="display: flex; justify-content: space-between; color: #aaa; font-size: 10px;">
+                <span>{{ item.time }}</span>
+                <span style="color: #4CAF50; font-weight: bold;">{{ item.status }}</span>
+            </div>
+            <div style="margin-top: 4px; font-weight: bold;">{{ item.type }}</div>
+            <div style="font-size: 11px; color: #ccc; margin-top: 2px;">{{ item.details }}</div>
+        </div>
+        {% endfor %}
+    </div>
+</body>
+</html>
+"""
+        
