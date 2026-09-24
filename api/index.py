@@ -50,25 +50,6 @@ def fetch_latest_crypto_news():
         print(f"Error fetching news: {e}")
     return "لا توجد أخبار جديدة حالياً"
 
-def analyze_news_sentiment(title):
-    bullish_keywords = ['bullish', 'surge', 'breakout', 'approval', 'partnership', 'pump', 'high', 'gain', 'rally', 'adoption']
-    bearish_keywords = ['crash', 'drop', 'ban', 'hack', 'lawsuit', 'bearish', 'fall', 'loss', 'dump', 'slump']
-    
-    title_lower = title.lower()
-    score = 0
-    for word in bullish_keywords:
-        if word in title_lower:
-            score += 1
-    for word in bearish_keywords:
-        if word in title_lower:
-            score -= 1
-            
-    if score > 0:
-        return "BULLISH", title
-    elif score < 0:
-        return "BEARISH", title
-    return "NEUTRAL", title
-
 def calculate_rsi(closes, period=14):
     if len(closes) < period + 1:
         return 50.0
@@ -172,30 +153,16 @@ def analyze_smart_money_concepts(klines):
     curr_close = float(klines[-1][4])
     
     if curr_low < prev_low and curr_close > prev_low:
-        return "SM_SWEEP_LONG (اختراق وهمي للدعم) 🚀", True
+        return "SM_SWEEP_LONG (اختراق وهمي للدعم - فرصة صعود) 🚀", True
     elif curr_high > prev_high and curr_close < prev_high:
-        return "SM_SWEEP_SHORT (اختراق وهمي للمقاومة) 🩸", True
+        return "SM_SWEEP_SHORT (اختراق وهمي للمقاومة - فرصة هبوط) 🩸", True
     return "استقرار (لا يوجد سحب سيولة)", False
-
-def check_fair_value_gap(klines):
-    if len(klines) < 3:
-        return "لا يوجد FVG"
-    curr_low = float(klines[-1][3])
-    prev_prev_high = float(klines[-3][2])
-    curr_high = float(klines[-1][2])
-    prev_prev_low = float(klines[-3][3])
-    if curr_low > prev_prev_high:
-        return "Bullish FVG نشط 🟢"
-    elif curr_high < prev_prev_low:
-        return "Bearish FVG نشط 🔴"
-    return "استقرار (لا يوجد FVG)"
 
 @app.route("/")
 def index():
     tf = request.args.get("tf", "15m")
     klines = get_binance_klines(tf, limit=100)
     change_24h, current_price = get_market_data()
-    
     news_title = fetch_latest_crypto_news()
     
     rsi = 50.0
@@ -204,7 +171,6 @@ def index():
     support_val, resistance_val = 0.0, 0.0
     market_structure = "جاري التحليل..."
     smc_status = "جاري الفحص..."
-    fvg_status = "جاري الفحص..."
     has_signal = "false"
 
     if klines and len(klines) > 30:
@@ -217,16 +183,14 @@ def index():
         support_val, resistance_val = calculate_support_resistance(klines)
         market_structure = analyze_market_structure(closes)
         smc_status, is_smc_triggered = analyze_smart_money_concepts(klines)
-        fvg_status = check_fair_value_gap(klines)
         
-        # إذا حدث كسر هيكلي أو سحب سيولة، نفعل حالة التنبيه الصوتي
         if "كسر" in market_structure or is_smc_triggered or rsi > 70 or rsi < 30:
             has_signal = "true"
 
     rsi_pct = min(max(rsi, 0), 100)
     
     history = [
-        {"time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "type": "التنبيهات الصوتية", "details": "النظام الصوتي مفعل وجاهز لإطلاق صافرة التنبيه عند الفرص", "status": "نشط 🔔"}
+        {"time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "type": "التنبيهات الصوتية", "details": "النظام الصوتي مفعل وجاهز لإطلاق صافرة التنبيه عند صفقات الصعود والهبوط", "status": "نشط 🔔"}
     ]
 
     return render_template_string(HTML_TEMPLATE, 
@@ -241,7 +205,6 @@ def index():
                                  upper_bb=upper_bb,
                                  market_structure=market_structure,
                                  smc_status=smc_status,
-                                 fvg_status=fvg_status,
                                  latest_news=news_title,
                                  history=history,
                                  current_tf=tf,
@@ -269,7 +232,6 @@ HTML_TEMPLATE = """
     </style>
     <meta http-equiv="refresh" content="15">
     <script>
-        // نظام التنبيه الصوتي باستخدام Web Audio API المتطور
         function playBeep() {
             try {
                 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -277,22 +239,20 @@ HTML_TEMPLATE = """
                 const gainNode = audioCtx.createGain();
                 
                 oscillator.type = 'sine';
-                oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // تردد الصوت (نغمة تنبيه واضحة)
-                
+                oscillator.frequency.setValueAtTime(880, audioCtx.currentTime);
                 gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
                 
                 oscillator.connect(gainNode);
                 gainNode.connect(audioCtx.destination);
                 
                 oscillator.start();
-                oscillator.stop(audioCtx.currentTime + 0.4); // مدة التنبيه نصف ثانية تقريباً
+                oscillator.stop(audioCtx.currentTime + 0.4);
             } catch(e) {
                 console.log("Audio not allowed yet");
             }
         }
 
         window.onload = function() {
-            // تحقق مما إذا كانت هناك إشارة جديدة وتفعيل الصوت
             var signalDetected = "{{ has_signal }}";
             if(signalDetected === "true") {
                 playBeep();
@@ -365,4 +325,4 @@ HTML_TEMPLATE = """
 </body>
 </html>
 """
-        
+    
